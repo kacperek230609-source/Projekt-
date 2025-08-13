@@ -1,0 +1,55 @@
+import socket
+import cv2
+import numpy as np
+import pickle
+import pyautogui
+import threading
+import ssl
+import logging
+from pynput.mouse import Controller as MouseController
+from pynput.keyboard import Controller as KeyboardController
+
+HOST = 'server_ip_here'
+PORT = 65432
+
+mouse_controller = MouseController()
+keyboard_controller = KeyboardController()
+
+context = ssl.create_default_context()
+context.load_verify_locations(cafile='server.crt')
+
+def receive_screen():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        client_socket.connect((HOST, PORT))
+        client_socket = context.wrap_socket(client_socket, server_hostname=HOST)
+
+        while True:
+            data = b""
+            while len(data) < 4096:
+                packet = client_socket.recv(4096)
+                if not packet: break
+                data += packet
+
+            if data:
+                screen_data = pickle.loads(data)
+                frame = cv2.imdecode(screen_data, cv2.IMREAD_COLOR)
+                cv2.imshow("Remote Desktop", frame)
+                cv2.waitKey(1)
+
+def send_mouse_and_keyboard_events():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        client_socket.connect((HOST, PORT))
+        client_socket = context.wrap_socket(client_socket, server_hostname=HOST)
+
+        while True:
+            mouse_position = mouse_controller.position
+            mouse_event_data = {"type": "move", "x": mouse_position[0], "y": mouse_position[1]}
+            client_socket.sendall(pickle.dumps(mouse_event_data))
+
+
+def start_client():
+    threading.Thread(target=receive_screen, daemon=True).start()
+    threading.Thread(target=send_mouse_and_keyboard_events, daemon=True).start()
+
+if __name__ == "__main__":
+    start_client()
