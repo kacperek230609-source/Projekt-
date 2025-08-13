@@ -1,79 +1,84 @@
-# IMPORTS
-import time
-import os
-import sys
 import socket
-import ssl
+import pyautogui
+import pickle
+import cv2
 import threading
-import subprocess
-import argparse
-import logging
-import tkinter as tk
-from tkinter import messagebox
-from flask import Flask, render_template, request, redirect, url_for
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import json
-import datetime
-import random
-import re
-# Connection 
+from PIL import ImageGrab
+import ssl
+import time
+import logging
 
 HOST = '0.0.0.0'
 PORT = 65432
-PASSWORD = 'teken'
+PASSWORD = 'secure_password'  # Token-based authentication
 
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Setup SSL encryption
+context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
 context.load_cert_chain(certfile='server.crt', keyfile='server.key')
 
-def execute_command(command):
-    try:
-        output = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
-        return output.decode()
-    except subprocess.CalledProcessError as e:
-        return e.output.decode()
+# Function to capture screen
+def capture_screen(client_socket):
+    while True:
+        screen = ImageGrab.grab()
+        screen = np.array(screen)
+        _, buffer = cv2.imencode('.jpg', screen, [int(cv2.IMWRITE_JPEG_QUALITY), 80])  # JPEG Compression
+        data = pickle.dumps(buffer)
+        try:
+            client_socket.sendall(data)
+        except Exception as e:
+            logging.error(f"Error sending screen data: {e}")
+            break
 
-def handle_client(connstream, addr):
-    print(f'New connection from {addr}')
+# Function to handle client connection
+def handle_client(client_socket):
     try:
-        connstream.sendall(b'Password: ')
-        client_password = connstream.recv(1024).decode().strip()
+        client_socket.sendall(b"Password: ")
+        client_password = client_socket.recv(1024).decode().strip()
+
         if client_password != PASSWORD:
-            connstream.sendall(b'Authentication failed.\n')
-            connstream.close()
-            print(f'Authentication failed from {addr}')
+            client_socket.sendall(b"Authentication failed.\n")
+            logging.warning(f"Authentication failed for client.")
             return
         
-        connstream.sendall(b'Authentication successful. Send commands.\n')
-        
-        while True:
-            connstream.sendall(b'> ')
-            command = connstream.recv(1024).decode().strip()
-            if not command:
-                break
-            if command.lower() in ['exit', 'quit']:
-                break
-            result = execute_command(command)
-            connstream.sendall(result.encode() + b'\n')
-    except Exception as e:
-        print(f'Error with client {addr}: {e}')
-    finally:
-        connstream.close()
-        print(f'Connection closed {addr}')
+        client_socket.sendall(b"Authentication successful.\n")
+        logging.info(f"Client authenticated successfully.")
 
-def main():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0) as sock:
-        sock.bind((HOST, PORT))
-        sock.listen(5)
-        print(f'Server listening on {HOST}:{PORT}')
+        # Start screen capture thread
+        threading.Thread(target=capture_screen, args=(client_socket,), daemon=True).start()
+
         while True:
-            conn, addr = sock.accept()
+            data = client_socket.recv(1024)
+            if data == b"exit":
+                break
+            if data:
+                handle_mouse_and_keyboard_events(data)
+    except Exception as e:
+        logging.error(f"Error with client: {e}")
+    finally:
+        client_socket.close()
+        logging.info("Client disconnected.")
+
+# Function to handle mouse and keyboard events
+def handle_mouse_and_keyboard_events(data):
+    # Parse the data and handle events here
+    pass  # For future improvements to handle mouse/keyboard events
+
+# Start the server
+def start_server():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.bind((HOST, PORT))
+        server_socket.listen(5)
+        logging.info(f"Server listening on {HOST}:{PORT}")
+
+        while True:
+            conn, addr = server_socket.accept()
+            # Wrap the connection with SSL
             connstream = context.wrap_socket(conn, server_side=True)
-            client_thread = threading.Thread(target=handle_client, args=(connstream, addr))
-            client_thread.start()
+            logging.info(f"Connection from {addr}")
+            threading.Thread(target=handle_client, args=(connstream,), daemon=True).start()
 
 if __name__ == "__main__":
-    main()
-
-
+    start_server()
