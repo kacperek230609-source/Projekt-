@@ -1,55 +1,104 @@
 import socket
+import ssl
+import pickle
+import threading
 import cv2
 import numpy as np
-import pickle
-import pyautogui
-import threading
-import ssl
-import logging
 from pynput.mouse import Controller as MouseController
 from pynput.keyboard import Controller as KeyboardController
+import tkinter as tk
+from tkinter import messagebox
 
-HOST = 'server_ip_here'
+HOST = 'server_ip_here'  # Replace with your server IP
 PORT = 65432
+CERT_FILE = 'server.crt'
 
 mouse_controller = MouseController()
 keyboard_controller = KeyboardController()
 
 context = ssl.create_default_context()
-context.load_verify_locations(cafile='server.crt')
+context.load_verify_locations(cafile=CERT_FILE)
+
+running = False
 
 def receive_screen():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        client_socket.connect((HOST, PORT))
-        client_socket = context.wrap_socket(client_socket, server_hostname=HOST)
+    global running
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+            client_socket.connect((HOST, PORT))
+            client_socket = context.wrap_socket(client_socket, server_hostname=HOST)
 
-        while True:
-            data = b""
-            while len(data) < 4096:
-                packet = client_socket.recv(4096)
-                if not packet: break
-                data += packet
+            while running:
+                data = b""
+                while len(data) < 4096:
+                    packet = client_socket.recv(4096)
+                    if not packet:
+                        break
+                    data += packet
 
-            if data:
-                screen_data = pickle.loads(data)
-                frame = cv2.imdecode(screen_data, cv2.IMREAD_COLOR)
-                cv2.imshow("Remote Desktop", frame)
-                cv2.waitKey(1)
+                if data:
+                    try:
+                        screen_data = pickle.loads(data)
+                        frame = cv2.imdecode(screen_data, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            cv2.imshow("Remote Desktop", frame)
+                            cv2.waitKey(1)
+                    except Exception as e:
+                        print("Error decoding screen:", e)
+    except Exception as e:
+        messagebox.showerror("Connection Error", str(e))
+
 
 def send_mouse_and_keyboard_events():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        client_socket.connect((HOST, PORT))
-        client_socket = context.wrap_socket(client_socket, server_hostname=HOST)
+    global running
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+            client_socket.connect((HOST, PORT))
+            client_socket = context.wrap_socket(client_socket, server_hostname=HOST)
 
-        while True:
-            mouse_position = mouse_controller.position
-            mouse_event_data = {"type": "move", "x": mouse_position[0], "y": mouse_position[1]}
-            client_socket.sendall(pickle.dumps(mouse_event_data))
+            while running:
+                mouse_position = mouse_controller.position
+                mouse_event_data = {"type": "move", "x": mouse_position[0], "y": mouse_position[1]}
+                try:
+                    client_socket.sendall(pickle.dumps(mouse_event_data))
+                except Exception as e:
+                    print("Send failed:", e)
+    except Exception as e:
+        messagebox.showerror("Connection Error", str(e))
 
 
-def start_client():
+def start_connection():
+    global running
+    if running:
+        return
+    running = True
     threading.Thread(target=receive_screen, daemon=True).start()
     threading.Thread(target=send_mouse_and_keyboard_events, daemon=True).start()
 
-if __name__ == "__main__":
-    start_client()
+
+def stop_connection():
+    global running
+    running = False
+    cv2.destroyAllWindows()
+
+
+def on_closing():
+    stop_connection()
+    root.destroy()
+
+
+root = tk.Tk()
+root.title("Remote Desktop Client")
+root.geometry("300x150")
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+label = tk.Label(root, text="Remote Desktop Viewer", font=("Arial", 14))
+label.pack(pady=10)
+
+connect_btn = tk.Button(root, text="Connect", command=start_connection, width=20)
+connect_btn.pack(pady=5)
+
+disconnect_btn = tk.Button(root, text="Disconnect", command=stop_connection, width=20)
+disconnect_btn.pack(pady=5)
+
+root.mainloop()
